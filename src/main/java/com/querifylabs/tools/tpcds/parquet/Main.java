@@ -7,6 +7,8 @@ import java.nio.file.*;
 import java.util.*;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
+import org.apache.log4j.Level;
+import org.apache.log4j.Logger;
 
 public class Main {
 
@@ -149,6 +151,8 @@ public class Main {
   }
 
   public static void executeAllSQL(SparkSession spark, String sqlPath, String datasize) throws IOException {
+    String databaseName = "tpcds_" + datasize;
+    spark.sql(String.format("USE %s", databaseName));
     Path sqlsDir = Paths.get(sqlPath);
 
     try (Stream<Path> paths = Files.list(sqlsDir)) {
@@ -182,6 +186,7 @@ public class Main {
   }
 
   public static void main(String[] args) {
+    Logger.getRootLogger().setLevel(Level.WARN);
     Optional<AppConfig> appConfigOpt = parseArguments(args);
     if (appConfigOpt.isPresent()) {
       try {

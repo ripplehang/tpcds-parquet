@@ -61,7 +61,7 @@
                 <configuration>
                     <archive>
                         <manifest>
-                            <mainClass>com.querifylabs.tools.tpcds.parquet.MainTest</mainClass>
+                            <mainClass>com.querifylabs.tools.tpcds.parquet.Main</mainClass>
                         </manifest>
                     </archive>
                     <descriptorRefs>
