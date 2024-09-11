@@ -155,7 +155,7 @@ public class Main {
     }
   }
 
-  public static void execSQL(SparkSession spark, String sql, String fileName, String sqlPath, String datasize) {
+  public static void execSQL(SparkSession spark, String sql, String fileName, String sqlPath, String databaseName) {
     long start = System.nanoTime();
     long resultCount = 0;
     boolean exceptionOccurred = false;
@@ -172,7 +172,7 @@ public class Main {
     System.out.println("Execution time for file " + fileName + ": " + duration + " ms");
 
     try {
-      logToCSV(fileName, duration, resultCount, exceptionOccurred, Paths.get(sqlPath, "tpcds_perf_" + datasize + ".csv").toString());
+      logToCSV(fileName, duration, resultCount, exceptionOccurred, Paths.get(sqlPath, "tpcds_perf_" + databaseName + ".csv").toString());
     } catch (IOException e) {
       e.printStackTrace();
     }
@@ -193,7 +193,7 @@ public class Main {
 
       for (Path sqlFilePath : sqlFiles) {
         String sqlStatement = new String(Files.readAllBytes(sqlFilePath));
-        execSQL(spark, sqlStatement, sqlFilePath.getFileName().toString(), sqlPath, datasize);
+        execSQL(spark, sqlStatement, sqlFilePath.getFileName().toString(), sqlPath, databaseName);
       }
     }
   }
