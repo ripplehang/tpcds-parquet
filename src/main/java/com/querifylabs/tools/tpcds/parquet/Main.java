@@ -180,13 +180,16 @@ public class Main {
 
   public static void executeAllSQL(SparkSession spark, String sqlPath, String datasize, boolean localData) throws IOException {
     String databaseName = getDatabaseName(datasize, localData);
-    spark.sql(String.format("USE %s", databaseName));
+    String switchDatabase = String.format("USE %s", databaseName);
+    System.out.println(switchDatabase);
+    spark.sql(switchDatabase);
     Path sqlsDir = Paths.get(sqlPath);
 
     try (Stream<Path> paths = Files.list(sqlsDir)) {
       List<Path> sqlFiles = paths
         .filter(p -> p.toString().endsWith(".sql"))
-        .collect(Collectors.toList());
+              .sorted() // Sort the paths in natural (ASCII) order
+              .collect(Collectors.toList());
 
       for (Path sqlFilePath : sqlFiles) {
         String sqlStatement = new String(Files.readAllBytes(sqlFilePath));
