@@ -20,17 +20,19 @@ public class Main {
     String datasetSize;
     String sqlpath;
     String schemaPath;
+    String localDataPath;
     boolean needCreateSchema;
 
     public AppConfig(String accessKey, String secretKey, String s3bucket, String hiveMetaUrl,
-      String datasetSize, String sqlpath, String schemaPath, boolean needCreateSchema) {
-      this.accessKey = accessKey;
-      this.secretKey = secretKey;
-      this.s3bucket = s3bucket;
-      this.hiveMetaUrl = hiveMetaUrl;
-      this.datasetSize = datasetSize;
-      this.sqlpath = sqlpath;
-      this.schemaPath = schemaPath;
+      String datasetSize, String sqlpath, String schemaPath, String localDataPath,boolean needCreateSchema) {
+      this.accessKey = accessKey != null ? accessKey : "";
+      this.secretKey = secretKey != null ? secretKey : "";
+      this.s3bucket = s3bucket != null ? s3bucket : "";
+      this.hiveMetaUrl = hiveMetaUrl != null ? hiveMetaUrl : "";
+      this.datasetSize = datasetSize != null ? datasetSize : "";
+      this.sqlpath = sqlpath != null ? sqlpath : "";
+      this.schemaPath = schemaPath != null ? schemaPath : "";
+      this.localDataPath = localDataPath != null ? localDataPath : "";
       this.needCreateSchema = needCreateSchema;
     }
   }
@@ -51,7 +53,8 @@ public class Main {
       props.getProperty("datasetsize"),
       props.getProperty("sql_path"),
       props.getProperty("schema_path"),
-      needCreateSchema
+            props.getProperty("localdata_path"),
+            needCreateSchema
     );
   }
 
@@ -86,7 +89,16 @@ public class Main {
     }
   }
 
-  public static void createMetadata(SparkSession spark, String s3bucket, String schemaPath, String datasetsize) throws IOException {
+  public static String getDatabaseName(String datasetsize, boolean local) {
+    if(local) {
+      return "tpcds_" + datasetsize;
+    }
+    else {
+      return "tpcds_local_" + datasetsize;
+    }
+  }
+
+  public static void createMetadata(SparkSession spark, String s3bucket, String schemaPath, String datasetsize,String localdatapath) throws IOException {
     Path resourcesDir = Paths.get(schemaPath);
 
     try (Stream<Path> paths = Files.list(resourcesDir)) {
@@ -94,20 +106,36 @@ public class Main {
         .filter(p -> p.toString().endsWith(".schema"))
         .collect(Collectors.toList());
 
-      String databaseName = "tpcds_" + datasetsize;
-      String createDatabaseStatement = String.format(
-        "CREATE DATABASE IF NOT EXISTS %s LOCATION 's3a://%s/tpcds/%s'",
-        databaseName, s3bucket, datasetsize
-      );
+      String databaseName = getDatabaseName(datasetsize, !localdatapath.isEmpty());
+      String createDatabaseStatement;
+      if (localdatapath.isEmpty()){
+        createDatabaseStatement = String.format(
+                "CREATE DATABASE IF NOT EXISTS %s LOCATION 's3a://%s/tpcds/%s'",
+                databaseName, s3bucket, datasetsize
+        );
+      }
+      else {
+        createDatabaseStatement = String.format(
+                "CREATE DATABASE IF NOT EXISTS %s LOCATION '%s/%s'",
+                databaseName, localdatapath, datasetsize);
+      }
+
       spark.sql(createDatabaseStatement);
 
       for (Path schemaFilePath : schemaFiles) {
         String schemaContent = new String(Files.readAllBytes(schemaFilePath));
         String tableName = schemaFilePath.getFileName().toString().replace(".schema", "");
-        String createTableStatement = String.format(
-          "CREATE EXTERNAL TABLE IF NOT EXISTS %s.%s (%s) STORED AS PARQUET LOCATION 's3a://%s/tpcds/%s/%s'",
-          databaseName, tableName, schemaContent, s3bucket, datasetsize, tableName
-        );
+        String createTableStatement;
+        if (localdatapath.isEmpty()) {
+          createTableStatement = String.format(
+                  "CREATE EXTERNAL TABLE IF NOT EXISTS %s.%s (%s) STORED AS PARQUET LOCATION 's3a://%s/tpcds/%s/%s'",
+                  databaseName, tableName, schemaContent, s3bucket, datasetsize, tableName
+          );
+        } else {
+          createTableStatement = String.format(
+                  "CREATE EXTERNAL TABLE IF NOT EXISTS %s.%s (%s) STORED AS PARQUET LOCATION '%s/%s/%s'",
+                  databaseName, tableName, schemaContent, localdatapath, datasetsize, tableName);
+        }
         spark.sql(createTableStatement);
         System.out.println("=======>: " + tableName + " is created");
       }
@@ -150,8 +178,8 @@ public class Main {
     }
   }
 
-  public static void executeAllSQL(SparkSession spark, String sqlPath, String datasize) throws IOException {
-    String databaseName = "tpcds_" + datasize;
+  public static void executeAllSQL(SparkSession spark, String sqlPath, String datasize, boolean localData) throws IOException {
+    String databaseName = getDatabaseName(datasize, localData);
     spark.sql(String.format("USE %s", databaseName));
     Path sqlsDir = Paths.get(sqlPath);
 
@@ -193,9 +221,9 @@ public class Main {
         AppConfig appConfig = appConfigOpt.get();
         SparkSession spark = initSparkSession(appConfig);
         if (appConfig.needCreateSchema) {
-          createMetadata(spark, appConfig.s3bucket, appConfig.schemaPath, appConfig.datasetSize);
+          createMetadata(spark, appConfig.s3bucket, appConfig.schemaPath, appConfig.datasetSize, appConfig.localDataPath);
         }
-        executeAllSQL(spark, appConfig.sqlpath, appConfig.datasetSize);
+        executeAllSQL(spark, appConfig.sqlpath, appConfig.datasetSize, !appConfig.localDataPath.isEmpty());
         spark.stop();
       } catch (IOException e) {
         e.printStackTrace();
