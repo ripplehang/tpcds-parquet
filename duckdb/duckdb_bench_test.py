@@ -45,43 +45,45 @@ if args.source == 's3' and aws_access_key_id and aws_secret_access_key:
     con.execute(f"SET s3_secret_access_key='{aws_secret_access_key}'")
 
 try:
-    # Track the performance of table/view creation
-    with open(creation_performance_csv, mode='w', newline='') as creation_file:
-        creation_writer = csv.writer(creation_file)
-        # Write header
-        creation_writer.writerow(['Object Name', 'Object Type', 'Source', 'Creation Time (seconds)'])
+    need_create_schema = False
+    if need_create_schema:
+        # Track the performance of table/view creation
+        with open(creation_performance_csv, mode='w', newline='') as creation_file:
+            creation_writer = csv.writer(creation_file)
+            # Write header
+            creation_writer.writerow(['Object Name', 'Object Type', 'Source', 'Creation Time (seconds)'])
 
-        if args.source == 'local':
-            # Process local Parquet files
-            for item in os.listdir(local_parquet_directory):
-                item_path = os.path.join(local_parquet_directory, item)
-                if os.path.isdir(item_path):
-                    table_name = item
-                    start_time = time.time()
-                    print(f"start to create {args.object_type.upper()} {table_name}")
-                    con.execute(f"CREATE {args.object_type.upper()} {table_name} AS SELECT * FROM parquet_scan('{item_path}/*.parquet')")
-                    end_time = time.time()
-                    elapsed_time = end_time - start_time
-                    print(f"{table_name} {args.object_type} created from local directory, cost {elapsed_time} s")
-                    creation_writer.writerow([table_name, args.object_type, 'local', f'{elapsed_time:.2f}'])
-                    creation_file.flush()
-        elif args.source == 's3':
-            # Process S3 Parquet files
-            s3 = boto3.client('s3', aws_access_key_id=aws_access_key_id,
-                              aws_secret_access_key=aws_secret_access_key)
-            response = s3.list_objects_v2(Bucket=s3_bucket_name, Prefix=s3_tpcds_dir, Delimiter='/')
-            if 'CommonPrefixes' in response:
-                for prefix in response['CommonPrefixes']:
-                    table_prefix = prefix['Prefix']
-                    s3_file_pattern = f's3://{s3_bucket_name}/{table_prefix}*.parquet'
-                    table_name = os.path.basename(table_prefix.strip('/'))
-                    start_time = time.time()
-                    con.execute(f"CREATE {args.object_type.upper()} {table_name} AS SELECT * FROM parquet_scan('{s3_file_pattern}')")
-                    end_time = time.time()
-                    elapsed_time = end_time - start_time
-                    print(f"{table_name} {args.object_type} created from S3, cost {elapsed_time} s")
-                    creation_writer.writerow([table_name, args.object_type, 's3', f'{elapsed_time:.2f}'])
-                    creation_file.flush()
+            if args.source == 'local':
+                # Process local Parquet files
+                for item in os.listdir(local_parquet_directory):
+                    item_path = os.path.join(local_parquet_directory, item)
+                    if os.path.isdir(item_path):
+                        table_name = item
+                        start_time = time.time()
+                        print(f"start to create {args.object_type.upper()} {table_name}")
+                        con.execute(f"CREATE {args.object_type.upper()} {table_name} AS SELECT * FROM parquet_scan('{item_path}/*.parquet')")
+                        end_time = time.time()
+                        elapsed_time = end_time - start_time
+                        print(f"{table_name} {args.object_type} created from local directory, cost {elapsed_time} s")
+                        creation_writer.writerow([table_name, args.object_type, 'local', f'{elapsed_time:.2f}'])
+                        creation_file.flush()
+            elif args.source == 's3':
+                # Process S3 Parquet files
+                s3 = boto3.client('s3', aws_access_key_id=aws_access_key_id,
+                                  aws_secret_access_key=aws_secret_access_key)
+                response = s3.list_objects_v2(Bucket=s3_bucket_name, Prefix=s3_tpcds_dir, Delimiter='/')
+                if 'CommonPrefixes' in response:
+                    for prefix in response['CommonPrefixes']:
+                        table_prefix = prefix['Prefix']
+                        s3_file_pattern = f's3://{s3_bucket_name}/{table_prefix}*.parquet'
+                        table_name = os.path.basename(table_prefix.strip('/'))
+                        start_time = time.time()
+                        con.execute(f"CREATE {args.object_type.upper()} {table_name} AS SELECT * FROM parquet_scan('{s3_file_pattern}')")
+                        end_time = time.time()
+                        elapsed_time = end_time - start_time
+                        print(f"{table_name} {args.object_type} created from S3, cost {elapsed_time} s")
+                        creation_writer.writerow([table_name, args.object_type, 's3', f'{elapsed_time:.2f}'])
+                        creation_file.flush()
     # Execute SQL queries from files and measure time and row count
     with open(query_performance_csv, mode='w', newline='') as query_file:
         query_writer = csv.writer(query_file)

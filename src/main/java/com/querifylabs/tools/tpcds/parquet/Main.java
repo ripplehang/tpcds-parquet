@@ -10,8 +10,8 @@ import java.util.stream.Stream;
 import org.apache.log4j.Level;
 import org.apache.log4j.Logger;
 
-public class Main {
 
+public class Main {
   public static class AppConfig {
     String accessKey;
     String secretKey;
@@ -23,8 +23,11 @@ public class Main {
     String localDataPath;
     boolean needCreateSchema;
 
+    String sqlFile;
+
+
     public AppConfig(String accessKey, String secretKey, String s3bucket, String hiveMetaUrl,
-      String datasetSize, String sqlpath, String schemaPath, String localDataPath,boolean needCreateSchema) {
+      String datasetSize, String sqlpath, String schemaPath, String localDataPath,boolean needCreateSchema,String sqlFile) {
       this.accessKey = accessKey != null ? accessKey : "";
       this.secretKey = secretKey != null ? secretKey : "";
       this.s3bucket = s3bucket != null ? s3bucket : "";
@@ -34,10 +37,11 @@ public class Main {
       this.schemaPath = schemaPath != null ? schemaPath : "";
       this.localDataPath = localDataPath != null ? localDataPath : "";
       this.needCreateSchema = needCreateSchema;
+      this.sqlFile = sqlFile != null ? sqlFile : "";
     }
   }
 
-  public static AppConfig readConfig(String configFilePath) throws IOException {
+  public static AppConfig readConfig(String configFilePath,String sqlFile) throws IOException {
     Properties props = new Properties();
     try (FileInputStream fis = new FileInputStream(configFilePath)) {
       props.load(fis);
@@ -54,7 +58,8 @@ public class Main {
       props.getProperty("sql_path"),
       props.getProperty("schema_path"),
             props.getProperty("localdata_path"),
-            needCreateSchema
+            needCreateSchema,
+            sqlFile
     );
   }
 
@@ -70,7 +75,11 @@ public class Main {
     Options options = new Options();
     Option configOption = new Option("c", "config", true, "Path to configuration file");
     configOption.setRequired(true);
+    Option configOption2 = new Option("s", "sqlFile", true, "sqlFile");
+    configOption2.setRequired(false);
+
     options.addOption(configOption);
+    options.addOption(configOption2);
 
     CommandLineParser parser = new DefaultParser();
     HelpFormatter formatter = new HelpFormatter();
@@ -78,7 +87,8 @@ public class Main {
     try {
       CommandLine cmd = parser.parse(options, args);
       String configFile = cmd.getOptionValue("config");
-      return Optional.of(readConfig(configFile));
+      String sqlFile = cmd.getOptionValue("sqlFile");
+      return Optional.of(readConfig(configFile,sqlFile));
     } catch (ParseException e) {
       System.out.println("Parsing failed. Reason: " + e.getMessage());
       formatter.printHelp("SparkSQLExecutor", options);
@@ -91,10 +101,10 @@ public class Main {
 
   public static String getDatabaseName(String datasetsize, boolean local) {
     if(local) {
-      return "tpcds_" + datasetsize;
+      return "tpcds_local_" + datasetsize;
     }
     else {
-      return "tpcds_local_" + datasetsize;
+      return "tpcds_s3_" + datasetsize;
     }
   }
 
@@ -116,8 +126,8 @@ public class Main {
       }
       else {
         createDatabaseStatement = String.format(
-                "CREATE DATABASE IF NOT EXISTS %s LOCATION '%s/%s'",
-                databaseName, localdatapath, datasetsize);
+                "CREATE DATABASE IF NOT EXISTS %s LOCATION '/tmp/%s'",
+                databaseName, datasetsize);
       }
 
       spark.sql(createDatabaseStatement);
@@ -142,37 +152,46 @@ public class Main {
     }
   }
 
-  public static void logToCSV(String fileName, double duration, long resultCount, boolean exceptionOccurred, String csvFilePath) throws IOException {
+  public static void logToCSV(String fileName, String duration, long resultCount, boolean exceptionOccurred, String csvFilePath) throws IOException {
     String exceptionMarker = exceptionOccurred ? "EXCEPTION" : "";
-    String logLine = String.format("%s,%f,%d,%s%n", fileName, duration, resultCount, exceptionMarker);
+    String resultCountStr = Long.toString(resultCount);
+    if(exceptionOccurred){
+      resultCountStr = "EXCEPTION";
+    }
+    String logLine = String.format("%s,%s,%s%n", fileName, duration, resultCountStr);
     Path path = Paths.get(csvFilePath);
 
     synchronized (Main.class) {
       if (!Files.exists(path)) {
-        Files.write(path, "FileName,Duration(ms),ResultCount,Exception\n".getBytes(), StandardOpenOption.CREATE);
+        Files.write(path, "FileName,Duration(ms),ResultCount\n".getBytes(), StandardOpenOption.CREATE);
       }
       Files.write(path, logLine.getBytes(), StandardOpenOption.APPEND);
     }
   }
 
-  public static void execSQL(SparkSession spark, String sql, String fileName, String sqlPath, String databaseName) {
+  public static void execSQL(SparkSession spark, String fileName, String sqlPath, String databaseName) throws IOException {
+    String switchDatabase = String.format("USE %s", databaseName);
+    spark.sql(switchDatabase);
+    Path sqlFilePath = Paths.get(sqlPath,fileName);
+    String sqlStatement = new String(Files.readAllBytes(sqlFilePath));
     long start = System.nanoTime();
     long resultCount = 0;
     boolean exceptionOccurred = false;
     try {
-      var df = spark.sql(sql);
+      var df = spark.sql(sqlStatement);
       resultCount = df.count();
-      System.out.println("Successfully executed SQL from file: " + fileName + ", Result count: " + resultCount);
     } catch (Exception e) {
       exceptionOccurred = true;
       System.out.println("Error executing SQL from file: " + fileName + " - " + e.getMessage());
     }
     long end = System.nanoTime();
-    double duration = (end - start) / 1e6; // Convert nanoseconds to milliseconds
-    System.out.println("Execution time for file " + fileName + ": " + duration + " ms");
+// Calculate the duration in seconds
+    double durationInSeconds = (end - start) / 1e9;
+// Format the duration to two decimal places
+    String formattedDuration = String.format("%.2f", durationInSeconds);
 
     try {
-      logToCSV(fileName, duration, resultCount, exceptionOccurred, Paths.get(sqlPath, "tpcds_perf_" + databaseName + ".csv").toString());
+      logToCSV(fileName, formattedDuration, resultCount, exceptionOccurred, Paths.get(sqlPath, "tpcds_perf_" + databaseName + ".csv").toString());
     } catch (IOException e) {
       e.printStackTrace();
     }
@@ -180,9 +199,6 @@ public class Main {
 
   public static void executeAllSQL(SparkSession spark, String sqlPath, String datasize, boolean localData) throws IOException {
     String databaseName = getDatabaseName(datasize, localData);
-    String switchDatabase = String.format("USE %s", databaseName);
-    System.out.println(switchDatabase);
-    spark.sql(switchDatabase);
     Path sqlsDir = Paths.get(sqlPath);
 
     try (Stream<Path> paths = Files.list(sqlsDir)) {
@@ -192,8 +208,7 @@ public class Main {
               .collect(Collectors.toList());
 
       for (Path sqlFilePath : sqlFiles) {
-        String sqlStatement = new String(Files.readAllBytes(sqlFilePath));
-        execSQL(spark, sqlStatement, sqlFilePath.getFileName().toString(), sqlPath, databaseName);
+        execSQL(spark, sqlFilePath.getFileName().toString(), sqlPath, databaseName);
       }
     }
   }
@@ -216,7 +231,8 @@ public class Main {
       .getOrCreate();
   }
 
-  public static void main(String[] args) {
+
+  public static void main(String[] args) throws IOException, InterruptedException {
     Logger.getRootLogger().setLevel(Level.WARN);
     Optional<AppConfig> appConfigOpt = parseArguments(args);
     if (appConfigOpt.isPresent()) {
@@ -226,7 +242,11 @@ public class Main {
         if (appConfig.needCreateSchema) {
           createMetadata(spark, appConfig.s3bucket, appConfig.schemaPath, appConfig.datasetSize, appConfig.localDataPath);
         }
+        if (appConfig.sqlFile.isEmpty()) {
         executeAllSQL(spark, appConfig.sqlpath, appConfig.datasetSize, !appConfig.localDataPath.isEmpty());
+      } else {
+          execSQL(spark,appConfig.sqlFile,appConfig.sqlpath,getDatabaseName(appConfig.datasetSize,  !appConfig.localDataPath.isEmpty()));
+        }
         spark.stop();
       } catch (IOException e) {
         e.printStackTrace();
